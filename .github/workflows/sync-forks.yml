@@ -1,0 +1,58 @@
+name: Sync forked repositories
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+jobs:
+  sync-forks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Sync selected forked repositories
+        env:
+          GH_TOKEN: ${{ secrets.FORK_SYNC_TOKEN }}
+        run: |
+          set -u
+
+          page=1
+          failed=0
+
+          while true; do
+            repos=$(gh api "/user/repos?per_page=100&page=$page&affiliation=owner" \
+              --jq '.[] | select(.fork == true) | "\(.full_name) \(.default_branch)"')
+
+            if [ -z "$repos" ]; then
+              break
+            fi
+
+            while read -r repo branch; do
+              if [ -z "$repo" ] || [ -z "$branch" ]; then
+                continue
+              fi
+
+              echo "Syncing $repo branch $branch"
+
+              if gh api \
+                -X POST \
+                "repos/$repo/merge-upstream" \
+                -f branch="$branch"; then
+                echo "Synced $repo"
+              else
+                echo "Failed to sync $repo on branch $branch"
+                failed=$((failed + 1))
+              fi
+
+              echo ""
+            done <<< "$repos"
+
+            page=$((page + 1))
+          done
+
+          if [ "$failed" -gt 0 ]; then
+            echo "$failed repositories failed to sync."
+            exit 1
+          fi
+
+          echo "All selected forked repositories synced successfully."
