@@ -2,7 +2,7 @@ name: Sync forked repositories
 
 on:
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "30 3 * * *" # Production: daily at 09:00 IST
   workflow_dispatch:
 
 jobs:
@@ -17,42 +17,77 @@ jobs:
           set -u
 
           page=1
+          total=0
+          synced=0
           failed=0
+          skipped=0
+
+          echo "============================================================"
+          echo "Fork Sync Started"
+          echo "Started at: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "============================================================"
+          echo ""
 
           while true; do
+            echo "Fetching repositories from page $page..."
+
             repos=$(gh api "/user/repos?per_page=100&page=$page&affiliation=owner" \
               --jq '.[] | select(.fork == true) | "\(.full_name) \(.default_branch)"')
 
             if [ -z "$repos" ]; then
+              echo "No more forked repositories found."
+              echo ""
               break
             fi
 
             while read -r repo branch; do
               if [ -z "$repo" ] || [ -z "$branch" ]; then
+                skipped=$((skipped + 1))
                 continue
               fi
 
-              echo "Syncing $repo branch $branch"
+              total=$((total + 1))
 
-              if gh api \
+              echo "------------------------------------------------------------"
+              echo "Repository : $repo"
+              echo "Branch     : $branch"
+              echo "Status     : Syncing"
+              echo "Started    : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+
+              if output=$(gh api \
                 -X POST \
                 "repos/$repo/merge-upstream" \
-                -f branch="$branch"; then
-                echo "Synced $repo"
+                -f branch="$branch" 2>&1); then
+
+                synced=$((synced + 1))
+
+                echo "Result     : SUCCESS"
+                echo "Message    : Fork synced successfully"
               else
-                echo "Failed to sync $repo on branch $branch"
                 failed=$((failed + 1))
+
+                echo "Result     : FAILED"
+                echo "Message    : Could not sync fork"
+                echo "Details    : $output"
               fi
 
+              echo "Finished   : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+              echo "------------------------------------------------------------"
               echo ""
             done <<< "$repos"
 
             page=$((page + 1))
           done
 
+          echo "============================================================"
+          echo "Fork Sync Summary"
+          echo "Finished at : $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Total forks : $total"
+          echo "Synced      : $synced"
+          echo "Failed      : $failed"
+          echo "Skipped     : $skipped"
+          echo "============================================================"
+
           if [ "$failed" -gt 0 ]; then
-            echo "$failed repositories failed to sync."
             exit 1
           fi
-
-          echo "All selected forked repositories synced successfully."
